@@ -1,0 +1,212 @@
+# %% [markdown]
+# ![](https://2rdnmg1qbg403gumla1v9i2h-wpengine.netdna-ssl.com/wp-content/uploads/sites/3/2014/04/brainFacts-579411100-770x533-1-745x490.jpg)
+
+# %% [markdown]
+# Problem in hand : Given EEG data from subjects who were watching movies, let's try to predict the emotional state of a subject during a given movie.
+
+# %% [markdown]
+# ### Importing necessary libraries
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T19:50:58.566684Z","iopub.execute_input":"2025-03-08T19:50:58.567087Z","iopub.status.idle":"2025-03-08T19:51:05.357429Z","shell.execute_reply.started":"2025-03-08T19:50:58.566964Z","shell.execute_reply":"2025-03-08T19:51:05.356446Z"}}
+import tensorflow.compat.v1 as tf
+from sklearn.metrics import confusion_matrix
+import numpy as np
+from scipy.io import loadmat
+import os
+from pywt import wavedec
+from functools import reduce
+from scipy import signal
+from scipy.stats import entropy
+from scipy.fft import fft, ifft
+import pandas as pd
+from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.preprocessing import StandardScaler
+from tensorflow import keras as K
+import matplotlib.pyplot as plt
+import scipy
+from sklearn import metrics
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import KFold,cross_validate
+from tensorflow.keras.layers import Dense, Activation, Flatten, concatenate, Input, Dropout, LSTM, Bidirectional,BatchNormalization,PReLU,ReLU,Reshape
+from keras.wrappers.scikit_learn import KerasClassifier
+from sklearn.metrics import classification_report
+from tensorflow.keras.models import Sequential, Model, load_model
+import matplotlib.pyplot as plt;
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from sklearn.decomposition import PCA
+from sklearn.model_selection import cross_val_score
+from tensorflow import keras
+from tensorflow.keras.layers import Conv1D,Conv2D,Add
+from tensorflow.keras.layers import MaxPool1D, MaxPooling2D
+import seaborn as sns
+
+# %% [markdown]
+# ### Reading EEG data with feature extracted 
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T19:51:05.358821Z","iopub.execute_input":"2025-03-08T19:51:05.359210Z","iopub.status.idle":"2025-03-08T19:51:06.924804Z","shell.execute_reply.started":"2025-03-08T19:51:05.359173Z","shell.execute_reply":"2025-03-08T19:51:06.923933Z"}}
+data = pd.read_csv("../input/eeg-brainwave-dataset-feeling-emotions/emotions.csv")
+print(data.info())
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T19:51:06.925777Z","iopub.execute_input":"2025-03-08T19:51:06.926047Z","iopub.status.idle":"2025-03-08T19:51:06.963935Z","shell.execute_reply.started":"2025-03-08T19:51:06.926019Z","shell.execute_reply":"2025-03-08T19:51:06.963192Z"}}
+data
+
+# %% [markdown]
+# ### Viewing a sample of time series data 
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T19:51:06.964982Z","iopub.execute_input":"2025-03-08T19:51:06.965302Z","iopub.status.idle":"2025-03-08T19:51:06.976072Z","shell.execute_reply.started":"2025-03-08T19:51:06.965268Z","shell.execute_reply":"2025-03-08T19:51:06.975305Z"}}
+fft_data = data.loc[:,'fft_0_b':'fft_749_b']
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T19:51:06.978149Z","iopub.execute_input":"2025-03-08T19:51:06.978497Z","iopub.status.idle":"2025-03-08T19:51:07.017519Z","shell.execute_reply.started":"2025-03-08T19:51:06.978464Z","shell.execute_reply":"2025-03-08T19:51:07.016775Z"}}
+fft_data
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T19:51:07.018735Z","iopub.execute_input":"2025-03-08T19:51:07.018938Z","iopub.status.idle":"2025-03-08T19:51:07.273939Z","shell.execute_reply.started":"2025-03-08T19:51:07.018918Z","shell.execute_reply":"2025-03-08T19:51:07.273197Z"}}
+fft_data.iloc[0,:].plot(figsize=(15,10))
+
+# %% [markdown]
+# ### Encoding the 3 distinct labels 
+
+# %% [markdown]
+# The 3 labels are : "NEGATIVE", "NEUTRAL" and "POSITIVE".
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T19:51:07.274875Z","iopub.execute_input":"2025-03-08T19:51:07.275082Z","iopub.status.idle":"2025-03-08T19:51:07.281231Z","shell.execute_reply.started":"2025-03-08T19:51:07.275060Z","shell.execute_reply":"2025-03-08T19:51:07.280436Z"}}
+from sklearn.preprocessing import LabelEncoder
+le = LabelEncoder()
+data['label']=le.fit_transform(data['label'])
+
+# %% [markdown]
+# ### Defining necessary features for model training. 
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T19:51:07.282208Z","iopub.execute_input":"2025-03-08T19:51:07.282525Z","iopub.status.idle":"2025-03-08T19:51:07.343678Z","shell.execute_reply.started":"2025-03-08T19:51:07.282491Z","shell.execute_reply":"2025-03-08T19:51:07.343042Z"}}
+y = data.pop('label')
+X = data
+X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=0.7, random_state=48)
+X_train = np.array(X_train).reshape((X_train.shape[0],X_train.shape[1],1))
+X_test = np.array(X_test).reshape((X_test.shape[0],X_test.shape[1],1))
+y_train = pd.get_dummies(y_train)
+y_test = pd.get_dummies(y_test)
+
+# %% [markdown]
+# ### Defining the Model's architecture 
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T19:51:07.344838Z","iopub.execute_input":"2025-03-08T19:51:07.345158Z","iopub.status.idle":"2025-03-08T19:51:09.732517Z","shell.execute_reply.started":"2025-03-08T19:51:07.345124Z","shell.execute_reply":"2025-03-08T19:51:09.731722Z"}}
+inputs = tf.keras.Input(shape=(X_train.shape[1],1))
+
+gru = tf.keras.layers.GRU(256, return_sequences=True)(inputs)
+flat = Flatten()(gru)
+outputs = Dense(3, activation='softmax')(flat)
+
+model = tf.keras.Model(inputs, outputs)
+
+model.summary()
+
+# %% [markdown]
+# ### Plotting the model 
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T19:51:09.733448Z","iopub.execute_input":"2025-03-08T19:51:09.733665Z","iopub.status.idle":"2025-03-08T19:51:10.196734Z","shell.execute_reply.started":"2025-03-08T19:51:09.733644Z","shell.execute_reply":"2025-03-08T19:51:10.195811Z"}}
+tf.keras.utils.plot_model(model)
+
+# %% [markdown]
+# ### Training the model. 
+
+# %% [markdown]
+# The loss function used will be 'Categorical_CrossEntropy'. We will be using callback functions like Early_Stopping to avoid overfitting and lr_scheduler to change the learning rate while model trains.
+# 
+# We will be training for 100 epochs starting with learning_rate = 0.001 and batch_size = 64.
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T19:51:10.197952Z","iopub.execute_input":"2025-03-08T19:51:10.198212Z","iopub.status.idle":"2025-03-08T19:51:10.204650Z","shell.execute_reply.started":"2025-03-08T19:51:10.198179Z","shell.execute_reply":"2025-03-08T19:51:10.203924Z"}}
+def train_model(model,x_train, y_train,x_test,y_test, save_to, epoch = 2):
+
+        opt_adam = keras.optimizers.Adam(learning_rate=0.001)
+
+        es = EarlyStopping(monitor='val_loss', mode='min', verbose=1, patience=10)
+        mc = ModelCheckpoint(save_to + '_best_model.h5', monitor='val_accuracy', mode='max', verbose=1, save_best_only=True)
+        lr_schedule = tf.keras.callbacks.LearningRateScheduler(lambda epoch: 0.001 * np.exp(-epoch / 10.))
+        
+        model.compile(optimizer=opt_adam,
+                  loss=['categorical_crossentropy'],
+                  metrics=['accuracy'])
+        
+        history = model.fit(x_train,y_train,
+                        batch_size=32,
+                        epochs=epoch,
+                        validation_data=(x_test,y_test),
+                        callbacks=[es,mc,lr_schedule])
+        
+        saved_model = load_model(save_to + '_best_model.h5')
+        
+        return saved_model,history
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T19:51:10.205618Z","iopub.execute_input":"2025-03-08T19:51:10.205845Z","iopub.status.idle":"2025-03-08T20:15:27.515076Z","shell.execute_reply.started":"2025-03-08T19:51:10.205823Z","shell.execute_reply":"2025-03-08T20:15:27.514430Z"}}
+model,history = train_model(model, X_train, y_train,X_test, y_test, save_to= './', epoch = 5) 
+
+# %% [markdown]
+# ### Plotting the validation curves 
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T20:15:59.046923Z","iopub.execute_input":"2025-03-08T20:15:59.047475Z","iopub.status.idle":"2025-03-08T20:15:59.296050Z","shell.execute_reply.started":"2025-03-08T20:15:59.047426Z","shell.execute_reply":"2025-03-08T20:15:59.295282Z"}}
+plt.plot(history.history['accuracy'])
+plt.plot(history.history['val_accuracy'])
+plt.title('model accuracy')
+plt.ylabel('accuracy')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+# summarize history for loss
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('model loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+
+# %% [markdown]
+# ### Evaluating the model 
+
+# %% [markdown]
+# 1. Test accuracy
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T20:27:18.187699Z","iopub.execute_input":"2025-03-08T20:27:18.187976Z","iopub.status.idle":"2025-03-08T20:27:18.192790Z","shell.execute_reply.started":"2025-03-08T20:27:18.187950Z","shell.execute_reply":"2025-03-08T20:27:18.191994Z"}}
+model.evaluate
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T20:25:06.957853Z","iopub.execute_input":"2025-03-08T20:25:06.958172Z","iopub.status.idle":"2025-03-08T20:25:15.374251Z","shell.execute_reply.started":"2025-03-08T20:25:06.958144Z","shell.execute_reply":"2025-03-08T20:25:15.373393Z"}}
+model.predict(X_test)
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T20:21:19.456240Z","iopub.execute_input":"2025-03-08T20:21:19.456592Z","iopub.status.idle":"2025-03-08T20:21:19.655225Z","shell.execute_reply.started":"2025-03-08T20:21:19.456562Z","shell.execute_reply":"2025-03-08T20:21:19.653145Z"}}
+# Evaluate the best model
+model_acc = model.evaluate(X_test, y_test, verbose=0)[1]
+print("Test Accuracy: {:.3f}%".format(model_acc * 100))
+
+# %% [code]
+
+
+# %% [markdown]
+# 2. Confusion matrix along with classification reports (includes metrics like precision, F1-score)
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T20:33:46.299463Z","iopub.execute_input":"2025-03-08T20:33:46.299749Z","iopub.status.idle":"2025-03-08T20:33:46.303517Z","shell.execute_reply.started":"2025-03-08T20:33:46.299726Z","shell.execute_reply":"2025-03-08T20:33:46.302608Z"}}
+label_mapping = {'NEGATIVE': 0, 'NEUTRAL': 1, 'POSITIVE': 2}
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T20:28:39.316220Z","iopub.execute_input":"2025-03-08T20:28:39.316547Z","iopub.status.idle":"2025-03-08T20:28:47.670134Z","shell.execute_reply.started":"2025-03-08T20:28:39.316519Z","shell.execute_reply":"2025-03-08T20:28:47.669404Z"}}
+y_pred = np.array(list(map(lambda x: np.argmax(x), model.predict(X_test))))
+print(y_pred)
+# y_test = y_test.idxmax(axis=1)
+
+# cm = confusion_matrix(y_test, y_pred)
+# clr = classification_report(y_test, y_pred)
+
+# plt.figure(figsize=(8, 8))
+# sns.heatmap(cm, annot=True, vmin=0, fmt='g', cbar=False, cmap='Blues')
+# plt.xlabel("Predicted")
+# plt.ylabel("Actual")
+# plt.title("Confusion Matrix")
+# plt.show()
+
+# print("Classification Report:\n----------------------\n", clr)
+
+# %% [markdown]
+# ## Please upvote if you found it useful :) 
+
+# %% [code] {"execution":{"iopub.status.busy":"2025-03-08T20:15:45.405851Z","iopub.execute_input":"2025-03-08T20:15:45.406196Z","iopub.status.idle":"2025-03-08T20:15:46.449376Z","shell.execute_reply.started":"2025-03-08T20:15:45.406154Z","shell.execute_reply":"2025-03-08T20:15:46.448359Z"}}
+!zip -r best_model.zip best_model.h5
